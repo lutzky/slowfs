@@ -1,0 +1,38 @@
+#!/bin/bash
+
+set -e
+
+die() {
+	echo "$1" > /dev/stderr
+	exit 1
+}
+
+if [[ $# -lt 3 ]]; then
+	die "Usage: $0 IMAGE_FILE SIZE_MB FORMAT_COMMAND"
+fi
+
+if [[ $EUID -ne 0 ]]; then
+	die "$0 needs to be run as root 🤷"
+fi
+
+IMAGE_FILE="$1"
+SIZE_MB="$2"
+FORMAT_COMMAND="$3"
+
+loop_dev=
+
+trap cleanup EXIT
+
+cleanup() {
+	if [[ -n $loop_dev ]]; then
+		echo "Removing $loop_dev"
+		losetup -d $loop_dev
+	fi
+}
+
+echo "Creating $IMAGE_FILE with size ${SIZE_MB}MiB"
+dd if=/dev/zero of="$IMAGE_FILE" bs=1024k count=$SIZE_MB
+loop_dev=$(losetup --show --find $IMAGE_FILE)
+echo "Created loop device $loop_dev pointed at $IMAGE_FILE"
+echo "Running $FORMAT_COMMAND $loop_dev"
+$FORMAT_COMMAND $loop_dev

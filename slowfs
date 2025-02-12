@@ -1,0 +1,60 @@
+#!/bin/bash
+
+set -e
+
+die() {
+	echo "$1" > /dev/stderr
+	exit 1
+}
+
+if [[ $# -lt 2 ]]; then
+	die "Usage: $0 IMAGE_FILE MOUNT_POINT"
+fi
+
+if [[ $EUID -ne 0 ]]; then
+	die "$0 needs to be run as root 🤷"
+fi
+
+IMAGE_FILE="$1"
+MOUNT_POINT="$2"
+
+mapper_device_name=slowfs-dm
+
+loop_dev=
+
+cleanup() {
+	set +e
+	echo "Cleaning up"
+	if mount | grep -q $MOUNT_POINT; then
+		echo "Unmounting $MOUNT_POINT"
+		umount $MOUNT_POINT
+	fi
+	if dmsetup info $mapper_device_name > /dev/null 2>&1; then
+		echo "Removing $mapper_device_name"
+		dmsetup remove $mapper_device_name
+	fi
+	if [[ -n $loop_dev ]]; then
+		echo "Removing $loop_dev"
+		losetup -d "$loop_dev"
+	fi
+}
+
+trap cleanup EXIT
+
+loop_dev=$(losetup --show --find $IMAGE_FILE)
+echo "Created loop device $loop_dev pointed at $IMAGE_FILE"
+block_size=$(blockdev --getsize $loop_dev)
+echo "Creating $mapper_device_name"
+echo "0 $block_size delay $loop_dev 0 0" | dmsetup create $mapper_device_name
+echo "Mounting to $MOUNT_POINT"
+mount -o sync /dev/mapper/$mapper_device_name $MOUNT_POINT
+
+echo "$MOUNT_POINT is now mounted with 0 milliseconds delay"
+
+while true; do
+	read -p 'Change delay to (ms, q or ctrl-c to quit): ' new_delay
+	[[ $new_delay == "q" ]] && break
+	dmsetup reload $mapper_device_name --table "0 $block_size delay $loop_dev 0 $new_delay"
+	dmsetup resume $mapper_device_name
+	echo "Delay is now $new_delay ms"
+done
